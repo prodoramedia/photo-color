@@ -151,13 +151,18 @@ export default function TestPage() {
     try {
       const formData = new FormData();
       formData.append("image", file);
-      const result: AnalyzeResult = await analyzeAction(formData);
+      const result = await analyzeAction(formData);
 
       timer.stop();
-      setImageUrl(result.imageUrl);
-      setImageAnalysis(result.imageAnalysis);
-      setAnalysisResult(result.analysisResult);
-      setAnalysisMs(result.timingMs);
+      if (!result.success) {
+        setError(result.error);
+        setStatus("error");
+        return;
+      }
+      setImageUrl(result.data.imageUrl);
+      setImageAnalysis(result.data.imageAnalysis);
+      setAnalysisResult(result.data.analysisResult);
+      setAnalysisMs(result.data.timingMs);
       setStatus("idle");
     } catch (err) {
       timer.stop();
@@ -182,9 +187,15 @@ export default function TestPage() {
         timer.start();
         const formData = new FormData();
         formData.append("image", file);
-        url = await uploadAction(formData);
-        setImageUrl(url);
+        const uploadResult = await uploadAction(formData);
         timer.stop();
+        if (!uploadResult.success) {
+          setError(uploadResult.error);
+          setStatus("error");
+          return;
+        }
+        url = uploadResult.data;
+        setImageUrl(url);
       }
 
       setStatus("generating");
@@ -199,7 +210,12 @@ export default function TestPage() {
       });
 
       timer.stop();
-      setGenerateResult(result);
+      if (!result.success) {
+        setError(result.error);
+        setStatus("error");
+        return;
+      }
+      setGenerateResult(result.data);
       setStatus("done");
     } catch (err) {
       timer.stop();
@@ -232,7 +248,11 @@ export default function TestPage() {
       ratings,
     };
 
-    await saveLogAction(entry);
+    const result = await saveLogAction(entry);
+    if (!result.success) {
+      setError(result.error);
+      return;
+    }
     setLogSaved(true);
   }
 

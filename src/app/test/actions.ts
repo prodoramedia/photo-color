@@ -7,7 +7,6 @@ import {
   type ImageAnalysis,
   type GenerationResult,
   GENERATION_MODELS,
-  PipelineError,
 } from "@/lib/pipeline/types";
 import {
   analyzePhoto,
@@ -26,6 +25,19 @@ import {
 } from "@/lib/prompts/generation";
 import type { ComplexityLevel, PromptVariant } from "@/lib/pipeline/types";
 
+// ─── Result wrapper (server actions can't throw class instances) ─────────────
+
+type ActionResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: string };
+
+function fail(error: unknown): { success: false; error: string } {
+  const message =
+    error instanceof Error ? error.message : String(error);
+  console.error("[test-action]", message, error);
+  return { success: false, error: message };
+}
+
 // ─── Analyze Action ─────────────────────────────────────────────────────────
 
 export interface AnalyzeResult {
@@ -37,29 +49,53 @@ export interface AnalyzeResult {
 
 export async function analyzeAction(
   formData: FormData,
-): Promise<AnalyzeResult> {
-  const file = formData.get("image") as File | null;
-  if (!file) throw new Error("No image file provided");
+): Promise<ActionResult<AnalyzeResult>> {
+  try {
+    const file = formData.get("image") as File | null;
+    console.log("[analyze] Action called, file:", file?.name, file?.size, "bytes");
+    if (!file) return fail(new Error("No image file provided"));
 
-  // Upload to fal storage
-  const imageUrl = await uploadToFalStorage(file);
+    console.log("[analyze] Uploading image to fal storage...");
+    const imageUrl = await uploadToFalStorage(file);
+    console.log("[analyze] Uploaded:", imageUrl);
 
-  // Run Claude analysis
-  const start = performance.now();
-  const imageAnalysis = await analyzePhoto(imageUrl);
-  const timingMs = Math.round(performance.now() - start);
+    console.log("[analyze] Running Claude analysis...");
+    const start = performance.now();
+    const imageAnalysis = await analyzePhoto(imageUrl);
+    const timingMs = Math.round(performance.now() - start);
+    console.log("[analyze] Done in", timingMs, "ms");
 
-  const analysisResult = imageAnalysisToAnalysisResult(imageAnalysis);
+    const analysisResult = imageAnalysisToAnalysisResult(imageAnalysis);
 
-  return { imageUrl, imageAnalysis, analysisResult, timingMs };
+    // JSON round-trip to strip any non-serializable properties
+    // (e.g. Zod metadata, class instances from Anthropic SDK)
+    const safeData = JSON.parse(
+      JSON.stringify({ imageUrl, imageAnalysis, analysisResult, timingMs }),
+    ) as AnalyzeResult;
+
+    return { success: true, data: safeData };
+  } catch (error) {
+    return fail(error);
+  }
 }
 
 // ─── Upload Only (when analysis is off) ─────────────────────────────────────
 
-export async function uploadAction(formData: FormData): Promise<string> {
-  const file = formData.get("image") as File | null;
-  if (!file) throw new Error("No image file provided");
-  return uploadToFalStorage(file);
+export async function uploadAction(
+  formData: FormData,
+): Promise<ActionResult<string>> {
+  try {
+    const file = formData.get("image") as File | null;
+    if (!file) return fail(new Error("No image file provided"));
+
+    console.log("[upload] Uploading image to fal storage...");
+    const imageUrl = await uploadToFalStorage(file);
+    console.log("[upload] Uploaded:", imageUrl);
+
+    return { success: true, data: imageUrl };
+  } catch (error) {
+    return fail(error);
+  }
 }
 
 // ─── Generate Action ────────────────────────────────────────────────────────
@@ -82,96 +118,101 @@ export interface GenerateResult {
 
 export async function generateAction(
   params: GenerateParams,
-): Promise<GenerateResult> {
-  const { imageUrl, analysisResult, model, promptVariant, complexity } = params;
+): Promise<ActionResult<GenerateResult>> {
+  try {
+    const { imageUrl, analysisResult, model, promptVariant, complexity } =
+      params;
 
-  const modelInfo = GENERATION_MODELS.find((m) => m.id === model);
-  const isEdit = modelInfo?.type === "edit" || model.endsWith("/edit");
+    const modelInfo = GENERATION_MODELS.find((m) => m.id === model);
+    const isEdit = modelInfo?.type === "edit" || model.endsWith("/edit");
 
-  let generation: GenerationResult;
-  const genStart = performance.now();
+    let generation: GenerationResult;
+    const genStart = performance.now();
 
-  if (isEdit) {
-    // Edit endpoint: image-to-image
-    const prompt = buildEditPrompt(promptVariant, complexity, analysisResult);
+    if (isEdit) {
+      const prompt = buildEditPrompt(promptVariant, complexity, analysisResult);
+      console.log("[generate] Calling edit endpoint:", model);
+      console.log("[generate] Prompt length:", prompt.length, "chars");
 
-    const response = await callImageEdit({
-      model,
-      prompt,
-      imageUrls: [imageUrl],
+      const response = await callImageEdit({
+        model,
+        prompt,
+        imageUrls: [imageUrl],
+        outputFormat: "png",
+      });
+
+      const firstImage = response.images[0];
+      if (!firstImage) {
+        return fail(new Error("Image edit returned no images"));
+      }
+
+      generation = {
+        imageUrl: firstImage.url,
+        width: undefined,
+        height: undefined,
+        model,
+        promptUsed: prompt,
+        description: response.description,
+      };
+    } else {
+      const { prompt, negativePrompt } = buildGenerationPrompt(
+        promptVariant,
+        complexity,
+        analysisResult,
+      );
+      const inferenceConfig = getInferenceConfig(complexity);
+      console.log("[generate] Calling text-to-image:", model);
+
+      const response = await callImageGeneration({
+        prompt,
+        negativePrompt,
+        imageSize: "square_hd",
+        numInferenceSteps: inferenceConfig.numInferenceSteps,
+        guidanceScale: inferenceConfig.guidanceScale,
+      });
+
+      const firstImage = response.images[0];
+      if (!firstImage) {
+        return fail(new Error("Image generation returned no images"));
+      }
+
+      generation = {
+        imageUrl: firstImage.url,
+        width: firstImage.width,
+        height: firstImage.height,
+        model,
+        promptUsed: prompt,
+        negativePromptUsed: negativePrompt,
+        seed: response.seed,
+      };
+    }
+
+    const generationMs = Math.round(performance.now() - genStart);
+    console.log("[generate] Generation done in", generationMs, "ms");
+
+    console.log("[generate] Post-processing...");
+    const ppStart = performance.now();
+    const finalImage = await postProcessColoringPage(generation.imageUrl, {
       outputFormat: "png",
     });
+    const postProcessMs = Math.round(performance.now() - ppStart);
+    console.log("[generate] Post-process done in", postProcessMs, "ms");
 
-    const firstImage = response.images[0];
-    if (!firstImage) {
-      throw new PipelineError(
-        "Image edit returned no images",
-        "generation",
-      );
-    }
+    const imageBase64 = finalImage.toString("base64");
 
-    generation = {
-      imageUrl: firstImage.url,
-      width: undefined,
-      height: undefined,
-      model,
-      promptUsed: prompt,
-      description: response.description,
+    return {
+      success: true,
+      data: {
+        imageBase64,
+        mimeType: "image/png",
+        generation,
+        generationMs,
+        postProcessMs,
+      },
     };
-  } else {
-    // Text-to-image endpoint (fast-sdxl)
-    const { prompt, negativePrompt } = buildGenerationPrompt(
-      promptVariant,
-      complexity,
-      analysisResult,
-    );
-    const inferenceConfig = getInferenceConfig(complexity);
-
-    const response = await callImageGeneration({
-      prompt,
-      negativePrompt,
-      imageSize: "square_hd",
-      numInferenceSteps: inferenceConfig.numInferenceSteps,
-      guidanceScale: inferenceConfig.guidanceScale,
-    });
-
-    const firstImage = response.images[0];
-    if (!firstImage) {
-      throw new PipelineError(
-        "Image generation returned no images",
-        "generation",
-      );
-    }
-
-    generation = {
-      imageUrl: firstImage.url,
-      width: firstImage.width,
-      height: firstImage.height,
-      model,
-      promptUsed: prompt,
-      negativePromptUsed: negativePrompt,
-      seed: response.seed,
-    };
+  } catch (error) {
+    return fail(error);
   }
-
-  const generationMs = Math.round(performance.now() - genStart);
-
-  // Post-process
-  const ppStart = performance.now();
-  const finalImage = await postProcessColoringPage(generation.imageUrl, {
-    outputFormat: "png",
-  });
-  const postProcessMs = Math.round(performance.now() - ppStart);
-
-  const imageBase64 = finalImage.toString("base64");
-
-  return {
-    imageBase64,
-    mimeType: "image/png",
-    generation,
-    generationMs,
-    postProcessMs,
-  };
 }
 
 // ─── Save Log Action ────────────────────────────────────────────────────────
@@ -195,10 +236,19 @@ export interface TestLogEntry {
   ratings: Record<string, number>;
 }
 
-export async function saveLogAction(entry: TestLogEntry): Promise<void> {
-  const logDir = join(process.cwd(), "test-logs");
-  await mkdir(logDir, { recursive: true });
+export async function saveLogAction(
+  entry: TestLogEntry,
+): Promise<ActionResult<void>> {
+  try {
+    const logDir = join(process.cwd(), "test-logs");
+    await mkdir(logDir, { recursive: true });
 
-  const logPath = join(logDir, "results.jsonl");
-  await appendFile(logPath, JSON.stringify(entry) + "\n", "utf-8");
+    const logPath = join(logDir, "results.jsonl");
+    await appendFile(logPath, JSON.stringify(entry) + "\n", "utf-8");
+    console.log("[save-log] Entry saved to", logPath);
+
+    return { success: true, data: undefined };
+  } catch (error) {
+    return fail(error);
+  }
 }
