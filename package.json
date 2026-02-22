@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@fal-ai/client": "^1.9.3",
     "@fal-ai/serverless-proxy": "^0.10.0",
     "next": "16.1.6",

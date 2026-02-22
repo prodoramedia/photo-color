@@ -1,21 +1,24 @@
 import {
   type AnalysisResult,
   type GenerationResult,
+  type ImageAnalysis,
   type PipelineInput,
   type PipelineOutput,
   PipelineError,
   PipelineOptionsSchema,
 } from "@/lib/pipeline/types";
-import { buildAnalysisPrompt } from "@/lib/prompts/analysis";
 import {
   buildGenerationPrompt,
   getInferenceConfig,
 } from "@/lib/prompts/generation";
 import {
-  analyzeImageWithVision,
   callImageGeneration,
   uploadToFalStorage,
 } from "@/lib/pipeline/fal-client";
+import {
+  analyzePhoto,
+  imageAnalysisToAnalysisResult,
+} from "@/lib/pipeline/analyzer";
 import { postProcessColoringPage } from "@/lib/pipeline/post-process";
 
 async function resolveImageUrl(image: File | Blob | string): Promise<string> {
@@ -26,15 +29,17 @@ async function resolveImageUrl(image: File | Blob | string): Promise<string> {
 // ─── Individual Pipeline Steps ──────────────────────────────────────────────
 
 /**
- * Step 1: Analyze the input image using the vision model.
- * Extracts semantic elements, face regions, and scene context.
+ * Step 1: Analyze the input image using Claude's vision model.
+ * Returns the rich ImageAnalysis with subjects, bounding boxes,
+ * background complexity, and simplification targets.
  */
 export async function analyzeImage(
   input: PipelineInput,
-): Promise<AnalysisResult> {
+): Promise<{ imageAnalysis: ImageAnalysis; analysisResult: AnalysisResult }> {
   const imageUrl = await resolveImageUrl(input.image);
-  const prompt = buildAnalysisPrompt();
-  return analyzeImageWithVision(imageUrl, prompt);
+  const imageAnalysis = await analyzePhoto(imageUrl);
+  const analysisResult = imageAnalysisToAnalysisResult(imageAnalysis);
+  return { imageAnalysis, analysisResult };
 }
 
 /**
@@ -105,8 +110,8 @@ export async function postProcess(
 /**
  * Runs the complete coloring page generation pipeline:
  * 1. Validates input options
- * 2. Analyzes the input image (vision model)
- * 3. Generates a coloring page (image generation model)
+ * 2. Analyzes the input image (Claude vision)
+ * 3. Generates a coloring page (fal.ai image generation)
  * 4. Post-processes the result (Sharp)
  */
 export async function runPipeline(
@@ -128,17 +133,21 @@ export async function runPipeline(
     options: optionsResult.data,
   };
 
-  // Step 1: Analysis
+  // Step 1: Analysis (Claude vision)
   const analysisStart = performance.now();
-  const analysis = await analyzeImage(validatedInput);
+  const { imageAnalysis, analysisResult } =
+    await analyzeImage(validatedInput);
   const analysisMs = performance.now() - analysisStart;
 
-  // Step 2: Generation
+  // Step 2: Generation (fal.ai)
   const generationStart = performance.now();
-  const generation = await generateColoringPage(validatedInput, analysis);
+  const generation = await generateColoringPage(
+    validatedInput,
+    analysisResult,
+  );
   const generationMs = performance.now() - generationStart;
 
-  // Step 3: Post-processing
+  // Step 3: Post-processing (Sharp)
   const postProcessStart = performance.now();
   const outputFormat =
     validatedInput.options.outputFormat === "jpeg" ? "jpeg" : "png";
@@ -154,7 +163,8 @@ export async function runPipeline(
   return {
     finalImage,
     mimeType: outputFormat === "png" ? "image/png" : "image/jpeg",
-    analysis,
+    imageAnalysis,
+    analysis: analysisResult,
     generation,
     timing: {
       analysisMs: Math.round(analysisMs),

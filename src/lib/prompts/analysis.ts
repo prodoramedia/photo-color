@@ -1,11 +1,49 @@
 /**
- * Builds the analysis prompt for the vision LLM.
- *
- * Instructs the model to return a JSON object conforming to the
- * AnalysisResult schema: elements with importance ranking, face regions,
- * scene description, spatial layout, and background strategy.
+ * System prompt for the Claude vision analyzer.
+ * Sets the role and output expectations.
  */
-export function buildAnalysisPrompt(): string {
+export function buildAnalysisSystemPrompt(): string {
+  return `You are an expert image analyst for a coloring book generation pipeline. Your job is to examine a photograph and extract structured information that will guide the conversion of this photo into a coloring page.
+
+Be precise about spatial positions, distinctive features, and visual complexity. Your analysis directly determines what gets preserved and what gets simplified in the final coloring page.`;
+}
+
+/**
+ * User prompt for the Claude vision analyzer.
+ * Instructs the model on what to extract from the image.
+ * JSON structure is enforced by zodOutputFormat, so we focus on
+ * extraction guidance rather than format instructions.
+ */
+export function buildAnalysisUserPrompt(): string {
+  return `Analyze this photograph for coloring book conversion. Extract the following:
+
+**Photo Type**: Classify as "portrait" (1-2 people, face-focused), "group" (3+ people), "pet" (animal-focused), "landscape" (scenery, no prominent subjects), "landmark" (recognizable building/monument), or "other".
+
+**Subjects**: For each distinct subject (person, animal, prominent object):
+- Write a concise description (e.g. "young woman with curly red hair and round glasses")
+- Estimate a bounding box as normalized coordinates (0-1 range): x and y for the top-left corner, width and height as fractions of the full image
+- List distinctive features that MUST be preserved for recognizability (e.g. "round glasses", "handlebar mustache", "striped scarf", "missing front tooth")
+
+**Background**:
+- Describe the background briefly
+- Rate its visual complexity from 1 (plain solid color) to 10 (highly detailed scene)
+- List the key structural elements (e.g. "brick wall", "oak tree", "park bench")
+
+**Preservation Priorities**: Rank the most important elements to preserve, from most to least critical. These are the things that make this specific photo recognizable — the elements someone would notice if they were missing. Put the most important first.
+
+**Simplification Targets**: List elements that CAN be simplified or removed at different complexity levels. For each, specify:
+- What the element is
+- Why it can be simplified (e.g. "background clutter", "repetitive pattern", "small secondary detail")
+- Which complexity levels it applies to. Use: "toddler" (ages 2-4, maximum simplification), "child" (ages 5-8, moderate simplification), "tween" (ages 9-12, light simplification), "adult" (detailed, minimal simplification). An element that should be simplified for toddlers but kept for adults would have applicableComplexity: ["toddler", "child"].`;
+}
+
+// ─── Legacy Prompt (fal.ai LLaVA) ──────────────────────────────────────────
+
+/**
+ * @deprecated Use buildAnalysisSystemPrompt + buildAnalysisUserPrompt for Claude.
+ * Kept for the fal.ai LLaVA vision path in fal-client.ts.
+ */
+export function buildAnalysisPromptLegacy(): string {
   return `You are an image analysis assistant for a coloring book pipeline. Analyze this photograph and return a JSON object with the following structure. Return ONLY valid JSON, no other text.
 
 {

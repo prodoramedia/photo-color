@@ -72,6 +72,56 @@ export const AnalysisResultSchema = z.object({
 
 export type AnalysisResult = z.infer<typeof AnalysisResultSchema>;
 
+// ─── Image Analysis (Claude Vision) ─────────────────────────────────────────
+
+export const PhotoType = z.enum([
+  "portrait",
+  "group",
+  "pet",
+  "landscape",
+  "landmark",
+  "other",
+]);
+export type PhotoType = z.infer<typeof PhotoType>;
+
+export const BoundingBoxSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  width: z.number().min(0).max(1),
+  height: z.number().min(0).max(1),
+});
+export type BoundingBox = z.infer<typeof BoundingBoxSchema>;
+
+export const SubjectSchema = z.object({
+  description: z.string(),
+  boundingBox: BoundingBoxSchema,
+  distinctiveFeatures: z.array(z.string()),
+});
+export type Subject = z.infer<typeof SubjectSchema>;
+
+export const BackgroundInfoSchema = z.object({
+  description: z.string(),
+  complexity: z.number().int().min(1).max(10),
+  keyElements: z.array(z.string()),
+});
+export type BackgroundInfo = z.infer<typeof BackgroundInfoSchema>;
+
+export const SimplificationTargetSchema = z.object({
+  element: z.string(),
+  reason: z.string(),
+  applicableComplexity: z.array(ComplexityLevel),
+});
+export type SimplificationTarget = z.infer<typeof SimplificationTargetSchema>;
+
+export const ImageAnalysisSchema = z.object({
+  photoType: PhotoType,
+  subjects: z.array(SubjectSchema),
+  background: BackgroundInfoSchema,
+  preservationPriorities: z.array(z.string()),
+  simplificationTargets: z.array(SimplificationTargetSchema),
+});
+export type ImageAnalysis = z.infer<typeof ImageAnalysisSchema>;
+
 // ─── FAL Vision Response ────────────────────────────────────────────────────
 
 export const VisionResponseSchema = z.object({
@@ -122,6 +172,7 @@ export interface GenerationResult {
 export interface PipelineOutput {
   readonly finalImage: Buffer;
   readonly mimeType: "image/png" | "image/jpeg";
+  readonly imageAnalysis: ImageAnalysis;
   readonly analysis: AnalysisResult;
   readonly generation: GenerationResult;
   readonly timing: {
