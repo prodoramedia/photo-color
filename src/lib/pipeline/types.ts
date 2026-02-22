@@ -155,6 +155,54 @@ export type ImageGenerationResponse = z.infer<
   typeof ImageGenerationResponseSchema
 >;
 
+// ─── FAL Edit Response (image-to-image endpoints) ──────────────────────────
+
+export const EditImageFileSchema = z.object({
+  url: z.string().url(),
+  content_type: z.string().optional(),
+  file_name: z.string().optional(),
+  file_size: z.number().optional(),
+});
+
+export const EditImageResponseSchema = z.object({
+  images: z.array(EditImageFileSchema).min(1),
+  description: z.string().optional(),
+});
+
+export type EditImageResponse = z.infer<typeof EditImageResponseSchema>;
+
+// ─── Generation Models ──────────────────────────────────────────────────────
+
+export const GENERATION_MODELS = [
+  {
+    id: "fal-ai/nano-banana-pro/edit",
+    label: "Nano Banana Pro",
+    type: "edit" as const,
+  },
+  {
+    id: "fal-ai/gpt-image-1.5/edit",
+    label: "GPT Image 1.5",
+    type: "edit" as const,
+  },
+  {
+    id: "fal-ai/nano-banana/edit",
+    label: "Nano Banana",
+    type: "edit" as const,
+  },
+  {
+    id: "fal-ai/gemini-3-pro-image-preview/edit",
+    label: "Gemini 3 Pro Preview",
+    type: "edit" as const,
+  },
+  {
+    id: "fal-ai/fast-sdxl",
+    label: "Fast SDXL (text-to-image)",
+    type: "text-to-image" as const,
+  },
+] as const;
+
+export type GenerationModelId = (typeof GENERATION_MODELS)[number]["id"];
+
 // ─── Generation Result ──────────────────────────────────────────────────────
 
 export interface GenerationResult {
@@ -163,8 +211,9 @@ export interface GenerationResult {
   readonly height: number | undefined;
   readonly model: string;
   readonly promptUsed: string;
-  readonly negativePromptUsed: string;
-  readonly seed: number;
+  readonly negativePromptUsed?: string;
+  readonly seed?: number;
+  readonly description?: string;
 }
 
 // ─── Pipeline Output ────────────────────────────────────────────────────────

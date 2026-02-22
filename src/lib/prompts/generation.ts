@@ -299,6 +299,21 @@ export function buildGenerationPrompt(
 }
 
 /**
+ * Builds a single combined prompt for edit endpoints (image-to-image).
+ * Edit endpoints have no separate negative_prompt field, so negative
+ * constraints are folded into the main prompt.
+ */
+export function buildEditPrompt(
+  variant: PromptVariant,
+  complexityLevel: ComplexityLevel,
+  analysisResult?: AnalysisResult,
+): string {
+  const builder = VARIANT_BUILDERS[variant];
+  const positivePrompt = builder(complexityLevel, analysisResult);
+  return `${positivePrompt} MUST NOT include: ${NEGATIVE_PROMPT}.`;
+}
+
+/**
  * Returns recommended inference parameters for a given complexity level.
  * Higher complexity levels use more inference steps for finer detail.
  */

@@ -2,6 +2,8 @@ import { fal } from "@fal-ai/client";
 import {
   type AnalysisResult,
   AnalysisResultSchema,
+  type EditImageResponse,
+  EditImageResponseSchema,
   type ImageGenerationResponse,
   ImageGenerationResponseSchema,
   PipelineError,
@@ -129,6 +131,49 @@ export async function callImageGeneration(
   if (!parsed.success) {
     throw new PipelineError(
       `Image generation response validation failed: ${parsed.error.message}`,
+      "generation",
+      parsed.error,
+    );
+  }
+
+  return parsed.data;
+}
+
+// ─── Image Edit (image-to-image endpoints) ──────────────────────────────────
+
+interface ImageEditCallOptions {
+  readonly model: string;
+  readonly prompt: string;
+  readonly imageUrls: string[];
+  readonly numImages?: number;
+  readonly outputFormat?: "jpeg" | "png" | "webp";
+}
+
+export async function callImageEdit(
+  options: ImageEditCallOptions,
+): Promise<EditImageResponse> {
+  const {
+    model,
+    prompt,
+    imageUrls,
+    numImages = 1,
+    outputFormat = "png",
+  } = options;
+
+  const result = await fal.subscribe(model, {
+    input: {
+      prompt,
+      image_urls: imageUrls,
+      num_images: numImages,
+      output_format: outputFormat,
+    },
+    logs: true,
+  });
+
+  const parsed = EditImageResponseSchema.safeParse(result.data);
+  if (!parsed.success) {
+    throw new PipelineError(
+      `Image edit response validation failed: ${parsed.error.message}`,
       "generation",
       parsed.error,
     );
