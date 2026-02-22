@@ -33,5 +33,8 @@ next-env.d.ts
 # test logs
 test-logs/
 
+# batch test results
+test-results/
+
 # vercel
 .vercel
