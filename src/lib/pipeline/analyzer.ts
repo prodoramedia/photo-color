@@ -1,5 +1,4 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import {
   type AnalysisResult,
   type ImageAnalysis,
@@ -14,6 +13,87 @@ import {
 // This module must only be imported in server-side code.
 
 const ANALYSIS_MODEL = "claude-sonnet-4-20250514" as const;
+
+// JSON Schema for the ImageAnalysis tool (mirrors ImageAnalysisSchema)
+const IMAGE_ANALYSIS_TOOL: Anthropic.Tool = {
+  name: "record_analysis",
+  description:
+    "Record the structured analysis of the photograph. You MUST call this tool with your analysis.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      photoType: {
+        type: "string",
+        enum: ["portrait", "group", "pet", "landscape", "landmark", "other"],
+      },
+      subjects: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            boundingBox: {
+              type: "object",
+              properties: {
+                x: { type: "number", minimum: 0, maximum: 1 },
+                y: { type: "number", minimum: 0, maximum: 1 },
+                width: { type: "number", minimum: 0, maximum: 1 },
+                height: { type: "number", minimum: 0, maximum: 1 },
+              },
+              required: ["x", "y", "width", "height"],
+            },
+            distinctiveFeatures: {
+              type: "array",
+              items: { type: "string" },
+            },
+          },
+          required: ["description", "boundingBox", "distinctiveFeatures"],
+        },
+      },
+      background: {
+        type: "object",
+        properties: {
+          description: { type: "string" },
+          complexity: { type: "integer", minimum: 1, maximum: 10 },
+          keyElements: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+        required: ["description", "complexity", "keyElements"],
+      },
+      preservationPriorities: {
+        type: "array",
+        items: { type: "string" },
+      },
+      simplificationTargets: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            element: { type: "string" },
+            reason: { type: "string" },
+            applicableComplexity: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: ["toddler", "child", "tween", "adult"],
+              },
+            },
+          },
+          required: ["element", "reason", "applicableComplexity"],
+        },
+      },
+    },
+    required: [
+      "photoType",
+      "subjects",
+      "background",
+      "preservationPriorities",
+      "simplificationTargets",
+    ],
+  },
+};
 
 function getClient(): Anthropic {
   return new Anthropic();
@@ -76,10 +156,12 @@ export async function analyzePhoto(
         };
 
   try {
-    const response = await client.messages.parse({
+    const response = await client.messages.create({
       model: ANALYSIS_MODEL,
       max_tokens: 2048,
       system: buildAnalysisSystemPrompt(),
+      tools: [IMAGE_ANALYSIS_TOOL],
+      tool_choice: { type: "tool", name: "record_analysis" },
       messages: [
         {
           role: "user",
@@ -89,19 +171,29 @@ export async function analyzePhoto(
           ],
         },
       ],
-      output_config: {
-        format: zodOutputFormat(ImageAnalysisSchema),
-      },
     });
 
-    if (!response.parsed_output) {
+    const toolBlock = response.content.find(
+      (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+    );
+
+    if (!toolBlock) {
       throw new PipelineError(
-        `Claude returned no parsed output. Stop reason: ${response.stop_reason}`,
+        `Claude did not call the analysis tool. Stop reason: ${response.stop_reason}`,
         "analysis",
       );
     }
 
-    return response.parsed_output;
+    const parsed = ImageAnalysisSchema.safeParse(toolBlock.input);
+    if (!parsed.success) {
+      throw new PipelineError(
+        `Analysis tool output did not match schema: ${parsed.error.message}`,
+        "analysis",
+        parsed.error,
+      );
+    }
+
+    return parsed.data;
   } catch (error) {
     if (error instanceof PipelineError) throw error;
     if (error instanceof Anthropic.APIError) {

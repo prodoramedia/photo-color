@@ -159,9 +159,9 @@ export type ImageGenerationResponse = z.infer<
 
 export const EditImageFileSchema = z.object({
   url: z.string().url(),
-  content_type: z.string().optional(),
-  file_name: z.string().optional(),
-  file_size: z.number().optional(),
+  content_type: z.string().nullish(),
+  file_name: z.string().nullish(),
+  file_size: z.number().nullish(),
 });
 
 export const EditImageResponseSchema = z.object({
